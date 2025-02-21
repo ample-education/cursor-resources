@@ -1,4 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+# Ensure we're running in bash and preserve environment
+if [ -z "$BASH_VERSION" ]; then
+  # Get the real path of the script
+  SCRIPT_PATH=$(readlink -f "$0")
+  env ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" exec bash "$SCRIPT_PATH" "$@"
+fi
 
 # Color codes
 GREEN='\033[0;32m'
@@ -9,6 +16,33 @@ NC='\033[0m' # No Color
 # Constants
 MAX_BYTES_PER_REQUEST=8000000  # Stay under the 9MB limit
 MAX_CHUNK_SIZE=50000  # For string handling
+
+# Validate and set API key
+validate_api_key() {
+    # Check if ANTHROPIC_API_KEY is set via environment
+    local api_key="${ANTHROPIC_API_KEY}"
+    if [[ "$1" == "--api-key" && -n "$2" ]]; then
+        api_key="$2"
+        shift 2
+    fi
+
+    if [ -z "$api_key" ]; then
+        echo -e "${RED}Error:${NC} ANTHROPIC_API_KEY not set. Please set it using:"
+        echo "export ANTHROPIC_API_KEY=\"sk-ant-...\"" 
+        echo "or pass it directly:"
+        echo "tokens --api-key \"sk-ant-...\" <files...>"
+        return 1
+    fi
+
+    # Updated API key validation to be more permissive
+    if [[ ! "$api_key" =~ ^sk-ant- ]]; then
+        echo -e "${RED}Error:${NC} Invalid API key format. API key should start with 'sk-ant-'"
+        return 1
+    fi
+
+    echo "$api_key"
+    return 0
+}
 
 # Function to check if path should be excluded
 is_excluded_path() {
@@ -75,11 +109,11 @@ make_api_request() {
     # Write JSON payload to temp file
     echo "{\"model\":\"claude-3-haiku-20240307\",\"messages\":[{\"role\":\"user\",\"content\":$content}]}" > "$tmp_file"
 
-    # Make API call using the temp file
+    # Make API call using the temp file with updated headers
     local response=$(curl -s https://api.anthropic.com/v1/messages/count_tokens \
         --header "x-api-key: $api_key" \
-        --header "content-type: application/json" \
         --header "anthropic-version: 2023-06-01" \
+        --header "content-type: application/json" \
         --data @"$tmp_file")
 
     # Clean up temp file
@@ -187,28 +221,13 @@ collect_file_content() {
 }
 
 # Token counting function
-function tokens() {
+tokens() {
     # Check dependencies first
     check_dependencies
 
-    # Check if ANTHROPIC_API_KEY is set via environment or first argument
-    local api_key="${ANTHROPIC_API_KEY}"
-    if [[ "$1" == "--api-key" && -n "$2" ]]; then
-        api_key="$2"
-        shift 2
-    fi
-
-    # Validate API key format and presence
-    if [ -z "$api_key" ]; then
-        echo -e "${RED}Error:${NC} ANTHROPIC_API_KEY not set. Please set it using:"
-        echo "export ANTHROPIC_API_KEY=\"sk-ant-api03-...\"" 
-        echo "or pass it directly:"
-        echo "./tokens.sh --api-key \"sk-ant-api03-...\" <files...>"
-        return 1
-    fi
-
-    if [[ ! "$api_key" =~ ^sk-ant-api03-.+ ]]; then
-        echo -e "${RED}Error:${NC} Invalid API key format. API key should start with 'sk-ant-api03-'"
+    # Validate API key
+    local api_key=$(validate_api_key "$@")
+    if [ $? -ne 0 ]; then
         return 1
     fi
 
